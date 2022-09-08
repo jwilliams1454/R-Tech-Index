@@ -1,0 +1,237 @@
+---
+title: "Tech_index_scale_automation"
+output: html_document
+date: '2022-07-08'
+---
+
+---
+#Packages needed to download
+```{r setup, include=FALSE}
+#These are the necessary packages that need to be installed (install.packages("name of package")) in order for the following code to work. Example 
+# install.packages('dplyr')
+# install.packages('tidyverse')
+# install.packages('readxl')
+# install.packages('data.table')
+```
+
+NOTE: The chunk below are the things that are needed for the user to input. Look at the 'step by step' instructions file for full description 
+
+User input items
+```{r}
+
+path_name_to_folder <- c('C:/Users/ad14179/OneDrive - Lumen/Documents/Projects/Paradox of Choice/Data')
+#This is where the centroid and the data file with questionnaires are located 
+
+name_of_data_file<- c('UserTesting Metrics Data 4-7-10.xlsx')
+#Just the name of the file containing the questionnaire responses 
+
+name_of_cluster_centroid_file<- c('Tech_index_k_data.xlsx')
+#The name of the data file with the centroid values 
+
+
+name_of_saving_file<- c('4_7_10_tech_index_groups.csv')
+#This is where you type the name that you want the groupings data to be called (e.g. Tech Index Group data.csv)
+```
+
+#Nothing needed for input below this line#
+
+
+#loading in the data 
+```{r}
+#Then you need to 'open' them using the library command
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(data.table)
+
+setwd(path_name_to_folder)
+
+
+metric_data <-read_excel(path = name_of_data_file)
+
+
+cluster_data<- read_excel(name_of_cluster_centroid_file)
+
+```
+
+NOTE: Before moving on make sure that the tech question object has the order of the questions correct. Optimism question, insecurity questions, innovativeness question, discomfort question.
+
+#Cleaning and isolating questions of interest
+```{r}
+cluster_data_long<- cluster_data %>%
+  pivot_longer(., cols = c(Discomfort, Innovativeness, Insecurity, Optimism), names_to = "Domains", values_to = "Centroid_score" ) %>%
+  `colnames<-` (c("Group", "Domains", "Centroid_score"))
+cluster_data_long$Domains<- as.factor(cluster_data_long$Domains)
+
+header_true <- function(df) {
+  names(df) <- as.character(unlist(df[1,]))
+  df[-1,]
+} 
+
+
+#Cleaning the raw data if necessary 
+raw_data_cleaned <- data.frame()
+
+if(length(metric_data) == 5){ raw_data_cleaned <- metric_data
+}else if(length(metric_data) == 11){raw_data_cleaned<- metric_data
+}else if(length(metric_data >11) && grepl('Username', colnames(metric_data))) {
+  
+  raw_data_cleaned<- metric_data %>%
+    select(., contains(c('allow you to tailor', 'worry that information', 'for advice', 'embarrassing', 'mentally stimulating', 'not consider it safe', 'usually figure out', 'being taken advantage', 'new technology')),
+           Username)
+  
+} else {
+  
+ 
+removal_indicies<- grep('^Username', metric_data$Metrics)
+
+raw_data<- metric_data[removal_indicies[1]:nrow(metric_data),] %>%
+   `colnames<-` (c('First_column', paste0(2:length(.))))
+
+#Isolating the user names 
+usernames<- raw_data %>%
+  filter(., First_column %in% 'Username') %>%
+  pivot_longer(., cols = !First_column, values_to = 'Username', values_drop_na = T) %>%
+  select(Username)
+
+ questions_of_interest<- filter(raw_data,
+                grepl('allow you to tailor | worry that information | for advice | embarrassing | mentally stimulating| not consider it safe | usually figure out | being taken advantage | new technology', First_column)) %>%
+   t() %>% 
+   as.data.frame() %>%
+   header_true() %>%
+   slice(., 1:nrow(usernames))
+
+ 
+raw_data_cleaned<- cbind.data.frame(usernames, questions_of_interest)
+}
+
+data<- data.frame()
+
+for(row in 1:nrow(raw_data_cleaned)){
+  
+  current_row<- raw_data_cleaned[row,] %>%
+    pivot_longer(!Username, names_to = "Dimension_questions", values_to = "Values")
+
+    if(length(current_row$Dimension_questions) ==10){
+    
+    current_row_dimension<- current_row %>%
+      mutate(
+    Dimension_categories = case_when(
+     grepl('mentally stimulating', Dimension_questions) ~ 'Optimism',
+      grepl('never be sure it really', Dimension_questions) ~ 'Insecurity',
+      grepl('allow you to tailor',Dimension_questions) ~ "Optimism",
+      grepl('not consider it safe',Dimension_questions) ~ "Insecurity",
+      grepl('advice on new technologies',Dimension_questions) ~ "Innovativeness",
+      grepl('worry that information',Dimension_questions) ~ "Insecurity",
+      grepl('usually figure out',Dimension_questions) ~ "Innovativeness",
+      grepl('being taken advantage',Dimension_questions) ~ "Discomfort",
+      grepl('new technology',Dimension_questions) ~ "Innovativeness",
+      grepl('embarrassing',Dimension_questions) ~ "Discomfort")) 
+
+  
+      data<- rbind.data.frame(data, current_row_dimension)
+
+  }
+  
+  if(length(current_row$Dimension_questions) == 4){
+    
+    current_row_dimension<- current_row %>%
+      mutate(
+    Dimension_categories = case_when(
+      grepl('allow you to tailor',Dimension_questions) ~ 'Optimism',
+      grepl('worry that information', Dimension_questions) ~ 'Insecurity',
+      grepl('advice on new technologies',Dimension_questions) ~ "Innovativeness",
+      grepl('embarrassing',Dimension_questions) ~ "Discomfort"))
+    
+      data<- rbind.data.frame(data, current_row_dimension)
+
+  }
+}
+
+
+data_final<- data %>%
+  mutate_at(., c('Values'), as.numeric) %>%
+  group_by(Username, Dimension_categories) %>%
+  summarize(mean(Values)) %>%
+  `colnames<-` (c('Username', 'Dimension_categories', 'Values'))
+
+```
+
+#Finding categories for participants based on the centroids of the data 
+```{r}
+
+groups_data<- data.frame()
+
+for(row in 1:nrow(data_final)){
+  
+  current_row<- data_final[row ,]
+  
+  current_participant<- data_final %>%
+    filter(Username %in% current_row$Username) %>%
+    select(Username, Dimension_categories, Values) %>%
+    arrange(Dimension_categories) %>%
+    cbind.data.frame(., cluster_data_long) %>%
+    mutate(score_difference = (Centroid_score - Values)^2 )
+  
+  ovr_tech_score_1<- current_participant %>%
+    select(Username, Dimension_categories, Values) %>%
+    distinct() %>%
+    filter(Dimension_categories %in% c('Optimism', 'Innovativeness')) %>%
+    summarize(Optimism_Innovativeness_score = sum(Values))
+  
+  ovr_tech_score_2<- current_participant %>%
+    select(Username, Dimension_categories, Values) %>%
+    distinct() %>%
+    filter(Dimension_categories %in% c('Insecurity', 'Discomfort')) %>%
+    summarize(Insecure_Discomfort_score = sum(6-Values) )
+  
+  overall_tech_scores<- cbind.data.frame(ovr_tech_score_1, ovr_tech_score_2) %>%
+    summarize(Overall_tech_scores = sum(Optimism_Innovativeness_score, Insecure_Discomfort_score)) %>%
+    round(x = ., digits = 2)
+  
+  #This takes each participant and takes their scores on each of the 4 domains, subtracts the scores of the participants from each of the domains centroids scores, and squares it 
+   
+   Dimension_scores<- current_participant %>%
+     group_by(Group) %>%
+     summarise(sqrt(sum(score_difference)))
+   
+#This takes each of the differences scores from the code above, groups them by group (explorers etc), sums the difference scores (difference between participant and centroid values) of the groups, and takes the square root of the value. 
+   
+   current_group_data<- current_row$Username %>%
+     cbind.data.frame(Dimension_scores, overall_tech_scores) %>%
+     `colnames<-` (c("Username", "Group", "Group_score", "Overall_tech_scores"))
+   
+#This takes the current user and combines the difference scores into one data frame 
+   
+   groups_data<- groups_data %>%
+     rbind.data.frame(., current_group_data)
+   
+#This uploads the current participants data into a new data frame for a grouping procedure
+   
+}
+
+#This for loop follows the equation for finding the grouping score. The equation takes the centroid score for each participant and subtracts that centroid value from the participants value.
+
+
+grouping_data<- groups_data %>%
+  distinct() %>%
+  group_by(Username) %>%
+  filter(Group_score == min(Group_score))
+
+#This finds the smallest difference score between centroid and participants values for each possible group (exploerer etc) and isolates that score. This represents the smalles euclidian distance between the participants data and the centroid value. 
+
+sum(match(unique(data$Username), unique(grouping_data$Username)) == 0)
+
+#This is just a check to make sure that all the users from the original data that was uploaded are there after all the computations has been completed. A '0' means there are no differences and that is what we want 
+
+
+table(grouping_data$Group)
+
+
+```
+
+#Saving relevant data to csv files
+```{r}
+
+write.csv(grouping_data, file = name_of_saving_file, row.names = F)
+```
